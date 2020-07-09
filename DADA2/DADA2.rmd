@@ -1,0 +1,225 @@
+---
+title: "DADA2"
+author: "María Mulet"
+date: "19 de mayo de 2020"
+output: html_document
+---
+
+# Set your working directory
+# Load DADA2 package:
+
+```{r setup, include=FALSE}
+library(dada2); packageVersion("dada2")
+library(phyloseq); packageVersion("phyloseq")
+library(vegan); packageVersion("vegan")
+library(ggplot2)
+library(DESeq2)
+library(fantaxtic)
+source("./ggrare.R")
+```
+
+
+# Define the following path variable so that it points to the extracted directory:
+```{r, echo=FALSE}
+path <- "./DADA2" # CHANGE ME to the directory containing the fastq files.
+list.files(path)
+```
+
+# Now we read in the names of the fastq files, and perform some string manipulation
+# to get matched lists of the forward and reverse fastq files:
+```{r, echo=FALSE}
+fnFs <- sort(list.files(path, pattern="_1.fastq.gz", full.names = TRUE)) #Change the pattern to make it coincide with your files.
+fnRs <- sort(list.files(path, pattern="_2.fastq.gz", full.names = TRUE))
+```
+
+# Extract sample names, assuming filenames have format: SAMPLENAME_XXX.fastq
+```{r, echo=FALSE}
+sample.names <- sapply(strsplit(basename(fnFs), "_"), `[`, 1)
+```
+
+######## Inspect read quality profiles #########
+
+# We start by visualizing the quality profiles of the forward reads:
+```{r, echo=FALSE}
+pdf("QualityF.pdf")
+plotQualityProfile(fnFs[1:2])
+dev.off()
+
+pdf("QualityR.pdf")
+plotQualityProfile(fnRs[1:2])
+dev.off()
+```
+
+######## Filter and trim ############
+
+# Assign the filenames for the filtered fastq.gz files
+# Place filtered files in filtered/ subdirectory
+```{r, echo=FALSE}
+filtFs <- file.path(path, "filtered", paste0(sample.names, "_F_filt.fastq.gz"))
+filtRs <- file.path(path, "filtered", paste0(sample.names, "_R_filt.fastq.gz"))
+names(filtFs) <- sample.names
+names(filtRs) <- sample.names
+out <- filterAndTrim(fnFs, filtFs, fnRs, filtRs, trimLeft = 10,
+                     maxN=0, maxEE=c(2,5), truncQ=2, rm.phix=TRUE,
+                     compress=TRUE, multithread=TRUE)
+head(out)
+```
+
+######### Learn the Error Rates #########
+
+```{r, echo=FALSE}
+# For forward reads:
+errF <- learnErrors(filtFs, multithread=TRUE)
+# For reverse reads:
+errR <- learnErrors(filtRs, multithread=TRUE)
+```
+
+# visualize the estimated error rates:
+```{r, echo=FALSE}
+pdf("Errors.pdf")
+plotErrors(errF, nominalQ=TRUE)
+dev.off()
+```
+
+######### Sample Inference ##########
+# Apply the core sample inference algorithm to the filtered and trimmed sequence data:
+```{r, echo=FALSE}
+dadaFs <- dada(filtFs, err=errF, multithread=TRUE)
+dadaRs <- dada(filtRs, err=errR, multithread=TRUE)
+dadaFs[[1]]
+```
+
+######### Merge paired reads ########
+# Merge the forward and reverse reads together to obtain the full denoised sequences:
+```{r, echo=FALSE}
+mergers <- mergePairs(dadaFs, filtFs, dadaRs, filtRs, verbose=TRUE)
+# Inspect the merger data.frame from the first sample
+head(mergers[[1]])
+```
+
+######## Construct sequence table ########
+# Construct an amplicon sequence variant table (ASV) table:
+```{r, echo=FALSE}
+seqtab <- makeSequenceTable(mergers)
+dim(seqtab)
+# Inspect distribution of sequence lengths
+table(nchar(getSequences(seqtab)))
+```
+
+######## Remove chimeras ##########
+```{r, echo=FALSE}
+seqtab.nochim <- removeBimeraDenovo(seqtab, method="consensus", multithread=TRUE, verbose=TRUE)
+dim(seqtab.nochim)
+sum(seqtab.nochim)/sum(seqtab)
+```
+
+######## Track reads through the pipeline #########
+
+# We’ll look at the number of reads that made it through each step in the pipeline:
+```{r, echo=FALSE}
+getN <- function(x) sum(getUniques(x))
+track <- cbind(out, sapply(dadaFs, getN), sapply(dadaRs, getN), sapply(mergers, getN), rowSums(seqtab.nochim))
+# If processing a single sample, remove the sapply calls: e.g. replace sapply(dadaFs, getN) with getN(dadaFs)
+colnames(track) <- c("input", "filtered", "denoisedF", "denoisedR", "merged", "nonchim")
+rownames(track) <- sample.names
+head(track)
+```
+
+######## Assign taxonomy ##########
+```{r pressure, echo=FALSE}
+taxa <- assignTaxonomy(seqtab.nochim, "./DADA2/silva_nr_v132_train_set.fa.gz", multithread=TRUE)
+#  Make species level assignments based on exact matching between ASVs and sequenced reference strains:
+taxa <- addSpecies(taxa, "./DADA2/silva_species_assignment_v132.fa.gz")
+```
+
+# Let’s inspect the taxonomic assignments:
+```{r, echo=FALSE}
+taxa.print <- taxa
+rownames(taxa.print) <- NULL
+head(taxa.print)
+```
+
+
+######## Handoff to phyloseq #########
+# Construct a simple sample data.frame:
+```{r, echo=FALSE}
+samples.out <- rownames(seqtab.nochim)
+subject <- sapply(strsplit(samples.out, "D"), `[`, 1)
+groups <- read.table("./DADA2/grupos.txt", header = TRUE)
+type <- as.vector(groups[,1])
+samdf <- data.frame(Subject=subject, Type=type)
+rownames(samdf) <- samples.out
+```
+
+
+# Construct a phyloseq object directly from the dada2 outputs:
+```{r, echo=FALSE}
+ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE),
+               sample_data(samdf),
+               tax_table(taxa))
+ps <- prune_samples(sample_names(ps) != "Mock", ps) # Remove mock sample
+```
+
+
+#Change ASV names
+```{r, echo=FALSE}
+dna <- Biostrings::DNAStringSet(taxa_names(ps))
+names(dna) <- taxa_names(ps)
+ps <- merge_phyloseq(ps, dna)
+taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
+ps
+```
+
+
+# Visualize alpha-diversity:
+```{r, echo=FALSE}
+pdf("Richness.pdf")
+plot_richness(ps, x="Type", measures=c("Shannon", "Chao1"), color="Type")
+dev.off()
+```
+
+
+# Ordinate:
+```{r, echo=FALSE}
+ps.prop <- transform_sample_counts(ps, function(otu) otu/sum(otu))
+ord.nmds.bray <- ordinate(ps.prop, method="NMDS", distance="bray")
+pdf("NMDS.pdf")
+plot_ordination(ps.prop, ord.nmds.bray, color="Type", title="Bray NMDS")
+dev.off()
+```
+
+# Rarefaction
+```{r, echo=FALSE}
+test_rare <- ggrare(ps, step = 500, color = "Type", label = "Subject", parallel = TRUE)
+test_rare <- test_rare + facet_wrap(~Type)
+pdf("rarefaction.pdf")
+test_rare
+dev.off()
+```
+
+# Diferential Abundance
+```{r, echo=FALSE}
+# Transform the phyloseq object in a deseq object.
+DESeqDATASET <- phyloseq::phyloseq_to_deseq2(ps, design=~Type)
+DESeqDATASET <-  estimateSizeFactors(DESeqDATASET ,type = "poscounts")
+DESeqDATASET <- DESeq(DESeqDATASET,fitType = "local")
+
+# Compare 2 groups:
+FEMvsMALE <-  results(DESeqDATASET, contrast = c("Type","female","male"), pAdjustMethod = "BH")
+FEMvsMALE_sig001 <- FEMvsMALE[which(FEMvsMALE$padj < 0.01),]
+FEMvsMALE_sig001_tab <- cbind(as(FEMvsMALE_sig001, "data.frame"), as(tax_table(ps)[rownames(FEMvsMALE_sig001), ], "matrix"))
+
+write.table(FEMvsMALE_sig001_tab, file='abundance.tsv', quote=FALSE, sep='\t')
+
+
+# We nees to obtain the more abundant taxa, in this case the top15:
+top15 <- get_top_taxa(physeq_obj = ps, n = 15, relative = T,
+                       discard_other = T, other_label = "Other")
+# As not all the taxa were classified at especies level, we are going to generate labels composed of different taxon level.
+top15 <- name_taxa(top15, label = "", species = F, other_label = "Other")
+
+# Let's graph:
+ptop15 = fantaxtic_bar(top15, color_by = "Family", label_by = "Genus", facet_by = "Type", grid_by = NULL, other_color = "Grey") 
+
+ptop15
+```
