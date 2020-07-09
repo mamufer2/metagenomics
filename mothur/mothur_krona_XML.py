@@ -1,4 +1,5 @@
 __author__ = 'Adam Caldwell'
+#  https://github.com/accaldwell/mothur_krona
 
 import sys
 import csv
