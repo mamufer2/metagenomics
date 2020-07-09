@@ -1,0 +1,126 @@
+# Generate stability file from fastq files.
+make.file(inputdir=., type=fastq, prefix=stability)
+
+# Combine two sets of reads for each sample.
+make.contigs(file=stability.files, processors=32)
+
+# Let's see what these sequences look like.
+summary.seqs(fasta=stability.trim.contigs.fasta)
+
+# We can see how are our sequences
+
+# Remove any sequences with ambiguous bases and longer than 275bp.
+screen.seqs(fasta=stability.trim.contigs.fasta, group=stability.contigs.groups, maxambig=0, maxlength=275)
+
+## Processing improved sequences.
+# Delete duplicates:
+unique.seqs(fasta=stability.trim.contigs.good.fasta)
+
+# Generate a table that contains the number of times each unique sequence shows up in each group.
+count.seqs(name=stability.trim.contigs.good.names, group=stability.contigs.good.groups)
+summary.seqs(count=stability.trim.contigs.good.count_table)
+
+# We can see that the number of sequences has been reduced
+
+# Generate a customized DB from silva DB with the position of primers.
+# Oligos.txt file contains forward and reverse primers.
+pcr.seqs(fasta=silva.bacteria.fasta, start=11894, end=25319, keepdots=F)
+rename.file(input=silva.bacteria.pcr.fasta, new=silva.v4.fasta)
+summary.seqs(fasta=silva.v4.fasta)
+
+# Now we can see the information of our reference alignment
+
+# Do the alignment.
+align.seqs(fasta=stability.trim.contigs.good.unique.fasta, reference=silva.v4.fasta)
+summary.seqs(fasta=stability.trim.contigs.good.unique.align, count=stability.trim.contigs.good.count_table)
+
+# We can see that the bulk of the sequences start at position 13862 and end at position 23444.You can see some deviations from this that are likely due to an insertion or deletion at the terminal ends of the alignments
+
+# To make sure that everything overlaps the same region:
+screen.seqs(fasta=stability.trim.contigs.good.unique.align, count=stability.trim.contigs.good.count_table, summary=stability.trim.contigs.good.unique.summary, start=13862, end=23444, maxhomop=8)
+# To get sequences that start at or before position 13862 and end at or after position 23444. 
+# We'll also set the maximum homopolymer length to 8 since there's nothing in the database with a stretch of 9 
+# or more of the same base in a row. We need the count table so that we can update the table for the sequences we're 
+# removing and we're also using the summary file so we don't have to figure out again all the start and stop positions.
+summary.seqs(fasta=current, count=current)
+
+# Now we know our sequences overlap the same alignment coordinates
+
+# To make sure they only overlap that region we'll filter the sequences to remove the overhangs at both ends.
+filter.seqs(fasta=stability.trim.contigs.good.unique.good.align, vertical=T, trump=.)
+
+# The results show that our initial alignment was 50000, we've removed 49424 terminal gap characters and the final alignment length is 576
+
+# Just in case we've created some redundancy across our sequences by trimming the ends:
+unique.seqs(fasta=stability.trim.contigs.good.unique.good.filter.fasta, count=stability.trim.contigs.good.good.count_table)
+
+# This identified 12 duplicate sequences
+
+# We do the pre-cluster:
+pre.cluster(fasta=stability.trim.contigs.good.unique.good.filter.unique.fasta, count=stability.trim.contigs.good.unique.good.filter.count_table, diffs=2)
+
+# Now we are going to remove chimeras. This command takes a bit long.
+chimera.vsearch(fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.fasta, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.count_table, dereplicate=t)
+
+# But is still necessary to remove these sequences from fasta file.
+remove.seqs(fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.fasta, accnos=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.accnos)
+summary.seqs(fasta=current, count=current)
+
+# The total number of sequences has been reduced
+
+# Now are going to remove any 'undesirable' in our dataset.
+classify.seqs(fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.fasta, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.count_table, reference=trainset9_032012.pds.fasta, taxonomy=trainset9_032012.pds.tax, cutoff=80)
+
+#For remove the undesirables:
+remove.lineage(fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.fasta, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.count_table, taxonomy=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pds.wang.taxonomy, taxon=Chloroplast-Mitochondria-unknown-Archaea-Eukaryota)
+summary.seqs(fasta=current, count=current)
+summary.tax(taxonomy=current, count=current)
+
+# At this point we have curated our data and we're ready to see what our error rate is
+
+
+## We can use R to make a representation of the taxonomic groups with the last file generated.
+
+## Assessing error rates (Optional). For this is necessary a Mock community.
+get.groups(count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.count_table, fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.fasta, groups=Mock)
+seq.error(fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.fasta, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table, reference=HMP_MOCK.v35.fasta, aligned=F)
+
+dist.seqs(fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.fasta, cutoff=0.03)
+cluster(column=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.dist, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table)
+make.shared(list=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.list, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table, label=0.03)
+rarefaction.single(shared=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.shared)
+# It would be interesting to plot the result of rarefaction.
+
+## OTUs
+# First we remove mock groups:
+remove.groups(count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.count_table, fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.fasta, taxonomy=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pds.wang.pick.taxonomy, groups=Mock)
+
+# Traditional way. (Takes a long time):
+dist.seqs(fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.fasta, cutoff=0.03)
+cluster(column=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.dist, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table)
+
+# Alternative (is faster, use less memory):
+cluster.split(fasta=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.fasta, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table, taxonomy=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pds.wang.pick.pick.pick.taxonomy, splitmethod=classify, taxlevel=4, cutoff=0.03)
+
+# How many sequences are in each OTU from each group?
+make.shared(list=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.list, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table, label=0.03)
+classify.otu(list=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.list, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table, taxonomy=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pds.wang.pick.pick.taxonomy, label=0.03)
+
+## Phylotypes:
+phylotype(taxonomy=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pds.wang.pick.pick.taxonomy)
+make.shared(list=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pds.wang.pick.pick.tx.list, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table, label=1)
+classify.otu(list=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pds.wang.pick.pick.tx.list, count=stability.trim.contigs.good.unique.good.filter.unique.precluster.denovo.vsearch.pick.pick.pick.count_table, taxonomy=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pds.wang.pick.pick.taxonomy, label=1)
+
+##Analysis:
+rename.file(taxonomy=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.0.03.cons.taxonomy, shared=stability.trim.contigs.good.unique.good.filter.unique.precluster.pick.pick.pick.opti_mcc.shared)
+count.groups(shared=stability.opti_mcc.shared)
+sub.sample(shared=stability.opti_mcc.shared, size=2403)
+
+## ALpha diversity:
+rarefaction.single(shared=stability.opti_mcc.shared, calc=sobs, freq=100)
+summary.single(shared=stability.opti_mcc.shared, calc=nseqs-coverage-sobs-invsimpson, subsample=T)
+
+## Beta diversity:
+dist.shared(shared=stability.opti_mcc.shared, calc=thetayc-jclass, subsample=t)
+pcoa(phylip=stability.opti_mcc.thetayc.0.03.lt.ave.dist)
+
